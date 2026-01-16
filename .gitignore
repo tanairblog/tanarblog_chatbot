@@ -1,0 +1,15 @@
+# Secrets
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Artifacts
+.gemini/
+.idea/
+.vscode/
+
+# We DO want vector_store.pkl checked in for now so you don't have to run ingest on the server
+# If it gets larger than 100MB, we would need Git LFS.
