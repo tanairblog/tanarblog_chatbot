@@ -28,7 +28,7 @@ generation_config = {
   "top_k": 1,
   "max_output_tokens": 2048,
 }
-model = genai.GenerativeModel('gemini-1.5-flash', generation_config=generation_config)
+model = genai.GenerativeModel('gemini-2.5-flash-lite', generation_config=generation_config)
 
 # Global variables for data
 store = {}
