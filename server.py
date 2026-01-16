@@ -28,12 +28,39 @@ generation_config = {
   "top_k": 1,
   "max_output_tokens": 2048,
 }
-model = genai.GenerativeModel('gemini-flash-latest', generation_config=generation_config)
+model = genai.GenerativeModel('gemini-1.5-flash', generation_config=generation_config)
 
 # Global variables for data
 store = {}
 
 import gzip
+import time
+import random
+from google.api_core import exceptions
+
+def retry_with_backoff(func, *args, retries=5, initial_delay=5, **kwargs):
+    """
+    Retries a function call with exponential backoff if a rate limit error occurs.
+    """
+    delay = initial_delay
+    for i in range(retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            # Check for 429 or ResourceExhausted
+            error_str = str(e).lower()
+            if "429" in error_str or "quota" in error_str or "resourceexhausted" in error_str:
+                if i == retries - 1:
+                    print(f"Max retries reached. Error: {e}")
+                    raise e
+                
+                # Add jitter
+                sleep_time = delay + random.uniform(0, 1)
+                print(f"Rate limit hit. Retrying in {sleep_time:.2f} seconds... (Attempt {i+1}/{retries})")
+                time.sleep(sleep_time)
+                delay *= 2 # Exponential backoff
+            else:
+                raise e
 
 def load_resources():
     global store
@@ -63,7 +90,9 @@ def search(query, top_k=3):
     
     # Embed query using Gemini API
     try:
-        result = genai.embed_content(
+        # Wrap the API call with retry logic
+        result = retry_with_backoff(
+            genai.embed_content,
             model=EMBEDDING_MODEL,
             content=query,
             task_type="retrieval_query"
@@ -145,7 +174,13 @@ def chat():
             
             Standalone Query:"""
             
-            rewritten = model.generate_content(rewrite_prompt).text.strip()
+            # Wrap API call
+            response_text = retry_with_backoff(
+                model.generate_content,
+                rewrite_prompt
+            )
+            rewritten = response_text.text.strip()
+            
             print(f"Original Query: {user_query}")
             print(f"Rewritten Query: {rewritten}")
             search_query = rewritten
@@ -186,7 +221,11 @@ def chat():
     
     # 4. Generate Answer
     try:
-        response = model.generate_content(prompt)
+        # Wrap API call
+        response = retry_with_backoff(
+            model.generate_content,
+            prompt
+        )
         answer = response.text
     except Exception as e:
         print(f"Gemini Error: {e}")
