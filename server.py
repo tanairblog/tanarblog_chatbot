@@ -134,6 +134,26 @@ def search(query, top_k=10):
         # Apply boost: Score + 0.5 * Recency
         scores = scores + (0.5 * normalized_ts)
 
+    # Keyword Boost (Hybrid Search)
+    # Boost articles with "fizet", "előfizet" in title if query contains them
+    query_lower = query.lower()
+    keywords = ['előfizet', 'fizet', 'tagság', 'csatlakoz']
+    
+    # Check if any keyword is in the query
+    active_keywords = [kw for kw in keywords if kw in query_lower]
+    
+    if active_keywords:
+        print(f"Active keywords found: {active_keywords}")
+        keyword_boosts = np.zeros(len(store['chunks']))
+        
+        for idx, c in enumerate(store['chunks']):
+            title_lower = c['title'].lower()
+            # If the chunk title contains any of the active keywords
+            if any(kw in title_lower for kw in active_keywords):
+                keyword_boosts[idx] = 0.2 # Significant boost in Cosine space
+                
+        scores = scores + keyword_boosts
+
     # Get top_k indices
     top_indices = np.argsort(scores)[::-1][:top_k]
     
