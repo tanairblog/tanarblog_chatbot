@@ -1,7 +1,7 @@
 import os
 import pickle
 import numpy as np
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import google.generativeai as genai
 from sentence_transformers import SentenceTransformer
@@ -185,6 +185,10 @@ def chat():
         "response": answer,
         "sources": [{"title": c['title'], "url": c['url'], "year": c['year']} for c in relevant_chunks]
     })
+
+@app.route('/')
+def index():
+    return send_from_directory('.', 'index.html')
 
 if __name__ == '__main__':
     load_resources()
