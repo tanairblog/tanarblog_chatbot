@@ -4,7 +4,6 @@ import numpy as np
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import google.generativeai as genai
-from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -15,7 +14,7 @@ CORS(app)
 
 # Configuration
 VECTOR_STORE_FILE = 'vector_store.pkl'
-MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2'
+EMBEDDING_MODEL = 'models/text-embedding-004'
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 if not GEMINI_API_KEY:
@@ -33,33 +32,46 @@ model = genai.GenerativeModel('gemini-flash-latest', generation_config=generatio
 
 # Global variables for data
 store = {}
-embedder = None
+
+import gzip
 
 def load_resources():
-    global store, embedder
-    if os.path.exists(VECTOR_STORE_FILE):
+    global store
+    
+    # Check for compressed file first
+    compressed_file = VECTOR_STORE_FILE + '.gz'
+    
+    if os.path.exists(compressed_file):
+        print(f"Loading vector store from {compressed_file}...")
+        with gzip.open(compressed_file, 'rb') as f:
+            store = pickle.load(f)
+        print("Vector store loaded (Compressed).")
+        print("Using Cloud Embeddings (0MB RAM usage).")
+        
+    elif os.path.exists(VECTOR_STORE_FILE):
         print(f"Loading vector store from {VECTOR_STORE_FILE}...")
         with open(VECTOR_STORE_FILE, 'rb') as f:
             store = pickle.load(f)
         print("Vector store loaded.")
-        
-        print(f"Loading embedding model {MODEL_NAME}...")
-        try:
-            # Try loading from local cache first to avoid network timeouts
-            print("Attempting to load model locally...")
-            embedder = SentenceTransformer(MODEL_NAME, local_files_only=True)
-        except Exception as e:
-            print(f"Local load failed ({e}), trying to download...")
-            embedder = SentenceTransformer(MODEL_NAME)
-        print("Model loaded.")
+        print("Using Cloud Embeddings (0MB RAM usage).")
     else:
         print("Vector store not found. Please run ingest.py first.")
 
 def search(query, top_k=3):
-    if not store or not embedder:
+    if not store:
         return []
     
-    query_embedding = embedder.encode([query])[0]
+    # Embed query using Gemini API
+    try:
+        result = genai.embed_content(
+            model=EMBEDDING_MODEL,
+            content=query,
+            task_type="retrieval_query"
+        )
+        query_embedding = np.array(result['embedding'])
+    except Exception as e:
+        print(f"Embedding error: {e}")
+        return []
     
     # Cosine similarity
     scores = np.dot(store['embeddings'], query_embedding)

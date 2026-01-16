@@ -1,7 +1,9 @@
 flask
 flask-cors
 google-generativeai
-sentence-transformers
+flask
+flask-cors
+google-generativeai
 scikit-learn
 python-dotenv
 gunicorn

@@ -1,13 +1,20 @@
 import json
 import pickle
 import os
-from sentence_transformers import SentenceTransformer
 import numpy as np
+import google.generativeai as genai
+import gzip
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configuration
 JSON_FILE = 'cikkek.json'
 VECTOR_STORE_FILE = 'vector_store.pkl'
-MODEL_NAME = 'paraphrase-multilingual-MiniLM-L12-v2' # Better for Hungarian
+EMBEDDING_MODEL = 'models/text-embedding-004' # Google's cloud model
+
+genai.configure(api_key=os.getenv('GEMINI_API_KEY')) # Better for Hungarian
 
 def list_articles(json_path):
     print(f"Loading {json_path}...")
@@ -93,23 +100,57 @@ def ingest():
 
     chunks = create_text_chunks(articles)
     
-    print(f"Loading embedding model {MODEL_NAME}...")
-    model = SentenceTransformer(MODEL_NAME)
+    print(f"Loading embedding model {EMBEDDING_MODEL} (Cloud API)...")
     
-    print("Generating embeddings (this may take a while)...")
-    texts = [c['text'] for c in chunks]
-    embeddings = model.encode(texts, show_progress_bar=True)
+    # Generate embeddings in batches
+    embeddings = []
     
-    # Save everything
-    store = {
-        'chunks': chunks,
-        'embeddings': embeddings
-    }
+    # text-embedding-004 supports batching (up to 100 usually)
+    batch_size = 50 
+    total = len(chunks)
     
-    with open(VECTOR_STORE_FILE, 'wb') as f:
-        pickle.dump(store, f)
+    print("Generating embeddings (using Google Cloud)...")
+    from tqdm import tqdm
     
-    print(f"Successfully saved {len(chunks)} embeddings to {VECTOR_STORE_FILE}")
+    for i in range(0, total, batch_size):
+        batch = chunks[i:i+batch_size]
+        texts = [c['text'] for c in batch]
+        
+        try:
+            # Call Gemini API
+            result = genai.embed_content(
+                model=EMBEDDING_MODEL,
+                content=texts,
+                task_type="retrieval_document"
+            )
+            
+            # Result is usually dictionary with 'embedding' key which is a list
+            if 'embedding' in result:
+                batch_embeddings = result['embedding']
+            else:
+                # Fallback format handling if needed
+                batch_embeddings = result
+                
+            embeddings.extend(batch_embeddings)
+            
+        except Exception as e:
+            print(f"Error embedding batch {i}: {e}")
+            # If batch fails, try one by one as fallback? Or just skip/stop.
+            # For now, let's just abort to be safe or fill with zeros.
+            print("Aborting ingestion due to API error. Check API Key or Quota.")
+            return
+
+    # Convert to numpy array with lower precision to save space (float16 is enough for cosine sim)
+    embeddings_np = np.array(embeddings, dtype=np.float16)
+    print(f"Generated embeddings shape: {embeddings_np.shape}")
+
+    # Save to compressed file
+    output_file = VECTOR_STORE_FILE + '.gz'
+    print(f"Saving to {output_file}...")
+    with gzip.open(output_file, 'wb') as f:
+        pickle.dump({'chunks': chunks, 'embeddings': embeddings_np}, f)
+    
+    print(f"Successfully saved compressed store to {output_file}")
 
 if __name__ == "__main__":
     ingest()
