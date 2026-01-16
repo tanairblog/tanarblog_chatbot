@@ -3,7 +3,8 @@ import pickle
 import numpy as np
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -20,15 +21,9 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 if not GEMINI_API_KEY:
     print("WARNING: GEMINI_API_KEY not found in .env file.")
 
-# Setup Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-generation_config = {
-  "temperature": 0.7,
-  "top_p": 1,
-  "top_k": 1,
-  "max_output_tokens": 2048,
-}
-model = genai.GenerativeModel('gemini-2.5-flash-lite', generation_config=generation_config)
+# Setup Gemini Client
+client = genai.Client(api_key=GEMINI_API_KEY)
+CHAT_MODEL = 'gemini-2.5-flash-lite'
 
 # Global variables for data
 store = {}
@@ -36,7 +31,6 @@ store = {}
 import gzip
 import time
 import random
-from google.api_core import exceptions
 
 def retry_with_backoff(func, *args, retries=5, initial_delay=5, **kwargs):
     """
@@ -84,7 +78,7 @@ def load_resources():
     else:
         print("Vector store not found. Please run ingest.py first.")
 
-def search(query, top_k=3):
+def search(query, top_k=10):
     if not store:
         return []
     
@@ -92,12 +86,26 @@ def search(query, top_k=3):
     try:
         # Wrap the API call with retry logic
         result = retry_with_backoff(
-            genai.embed_content,
+            client.models.embed_content,
             model=EMBEDDING_MODEL,
-            content=query,
-            task_type="retrieval_query"
+            contents=query,
+            config=types.EmbedContentConfig(
+                task_type="RETRIEVAL_QUERY"
+            )
         )
-        query_embedding = np.array(result['embedding'])
+        # Verify structure of result - usually result.embeddings[0].values or similar depending on batch
+        # For single content, it might be result.embeddings (list) or result.embedding
+        # In new SDK, for single string input: result.embeddings is a list of EmbedContentResponse
+        # actually for single input it usually returns one object with 'embedding' or 'embeddings'
+        # Let's handle the common case safely
+        if hasattr(result, 'embeddings') and result.embeddings:
+             # Assuming single embedding for single query
+             query_embedding = np.array(result.embeddings[0].values)
+        else:
+             # Fallback/Debug
+             print(f"Unexpected embedding result format: {result}")
+             return []
+
     except Exception as e:
         print(f"Embedding error: {e}")
         return []
@@ -123,10 +131,8 @@ def search(query, top_k=3):
         else:
             normalized_ts = np.zeros_like(timestamps, dtype=float)
 
-        # Apply boost: Score + 10.0 * Recency
-        # Extreme boost to ensure 2024 articles (Score ~14) always beat 2010 articles (Score ~5-7)
-        # This effectively sorts search results by date, then by relevance.
-        scores = scores + (10.0 * normalized_ts)
+        # Apply boost: Score + 0.5 * Recency
+        scores = scores + (0.5 * normalized_ts)
 
     # Get top_k indices
     top_indices = np.argsort(scores)[::-1][:top_k]
@@ -175,22 +181,28 @@ def chat():
             Standalone Query:"""
             
             # Wrap API call
-            response_text = retry_with_backoff(
-                model.generate_content,
-                rewrite_prompt
+            response = retry_with_backoff(
+                client.models.generate_content,
+                model=CHAT_MODEL,
+                contents=rewrite_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.7,
+                    top_p=1,
+                    top_k=1,
+                    max_output_tokens=2048
+                )
             )
-            rewritten = response_text.text.strip()
+            rewritten = response.text.strip()
             
             print(f"Original Query: {user_query}")
             print(f"Rewritten Query: {rewritten}")
             search_query = rewritten
          except Exception as e:
             print(f"Rewriting failed: {e}")
-            # Fallback to original
             pass
 
-    # 2. Retrieve Context using Optimized Query
-    relevant_chunks = search(search_query, top_k=5)
+    # 2. Retrieve Context
+    relevant_chunks = search(search_query, top_k=10)
     
     context_str = "\n\n".join([f"Article ({r['year']}): {r['title']}\n{r['text']}" for r in relevant_chunks])
     
@@ -223,8 +235,15 @@ def chat():
     try:
         # Wrap API call
         response = retry_with_backoff(
-            model.generate_content,
-            prompt
+            client.models.generate_content,
+            model=CHAT_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.7,
+                top_p=1,
+                top_k=1,
+                max_output_tokens=2048
+            )
         )
         answer = response.text
     except Exception as e:

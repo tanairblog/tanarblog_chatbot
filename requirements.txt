@@ -1,9 +1,6 @@
 flask
 flask-cors
-google-generativeai
-flask
-flask-cors
-google-generativeai
+google-genai
 scikit-learn
 python-dotenv
 gunicorn
